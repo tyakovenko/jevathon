@@ -65,7 +65,7 @@ cd frontend && npm run dev                                     # :5173
   - **GMI:** Claude models return 429, because rate limits aren't enabled for the org. The demo uses GLM-5.3 instead.
 - **Real adapters not built:** the coding-agent harness (mini-swe-agent in a Docker sandbox) and Browserbase research (Stagehand works in a smoke test on the `browserbase-setup` branch, but it isn't merged).
 - **GitHub not live:** it needs a token, a public tunnel for webhooks, and the CodeRabbit app installed on the repo.
-- **Demo repo has no CI:** with no CI, the checks gate reports "pending" instead of passing, so the gate can't pass yet.
+- **CI not visible to the gate yet:** the demo repo now has a test workflow, but the gate reads CI status through the GitHub adapter, which still runs on the fake. Until GitHub is live, the checks gate reports "pending" rather than passing.
 - **Thresholds are guesses:** the 0.5, 0.6 and 0.85 values were never tuned on real data. Which slop Choice values count as flags was a design call and needs review.
 - **Slop rubric lacks context:** questions refer to `contracts`, `repo_context` and `tests`, but Jev's state only contains the issue title and the file diff. That makes `invented_interface`, `duplicate_implementation` and `test_quality` weak until repo context is added.
 - **In-memory store:** all state is lost on restart. There is no persistence and no dashboard auth.
