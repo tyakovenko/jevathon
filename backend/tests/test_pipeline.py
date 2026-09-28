@@ -122,13 +122,16 @@ def test_dev_path_secret_in_diff_fails_checks_and_returns_to_dev():
 
 def test_slop_finding_fails_checks():
     async def go():
-        orch, svc = make({"intent": reply(Reply.accept, Reply.self_), "hidden_failures": noul(0.9)})
+        orch, svc = make({
+            "intent": reply(Reply.accept, Reply.self_),
+            "failure_handling": choice("swallowed", 0.9, ["handled", "swallowed", "false_success", "not_applicable", "unclear"]),
+        })
         t = await orch.on_issue_opened(7, "prod down", "")
         await orch.on_dev_reply("ana", "yes")
         await orch.on_dev_reply("ana", "mine")
         svc.github.diffs[78] = "diff --git a/a.py b/a.py\n+try:\n+    x()\n+except Exception:\n+    pass\n"
         await orch.on_pr_opened(78, "Closes #7")
-        assert any("hidden_failures" in f for f in t.check_findings)
+        assert any("failure_handling" in f for f in t.check_findings)
         await orch.drain()
     run(go())
 

@@ -4,22 +4,137 @@ import re
 from enum import StrEnum
 
 from pydantic import BaseModel
-from typesafe_sdk import Noul
+from typesafe_sdk import Choice, Noul, Score
 
 from app.config import Settings
 from app.services.github import CIStatus, GitHub
 from app.services.jev import Jev
 from app.services.secrets_scan import scan_diff
 
-# PLACEHOLDERS — final list to be supplied (see project-log). Keys become finding labels.
-SLOP_QUESTIONS: dict[str, str] = {
-    "scope_creep": "Does this change add code the issue didn't ask for "
-                   "(unrequested refactors, speculative abstractions, unused helpers)?",
-    "filler_comments": "Do the comments narrate what the code does, or contain hedging or placeholder text "
-                       "(e.g. 'for simplicity', 'in a real implementation', TODO stubs)?",
-    "hidden_failures": "Does this change hide failures (swallowed exceptions, catch-and-return-default, "
-                       "fallbacks that fake success)?",
+# Final AI-slop rubric (source: AISlopqs.txt). Keys become finding labels.
+# Each spec's "type" says which typesafe_sdk Question to build (see _build_question):
+# noul (yes/no probability), choice (pick one criterion), or score (severity level).
+SLOP_QUESTIONS: dict[str, dict] = {
+    "requirement_coverage": {
+        "type": "choice",
+        "instructions": "How well does `diff` implement `requirement`?",
+        "criteria": {
+            "complete": "The required behavior is present.",
+            "partial": "Some required behavior is missing.",
+            "unrelated": "The change does not address the requirement.",
+            "unclear": "The supplied evidence is insufficient to decide.",
+        },
+    },
+    "invented_interface": {
+        "type": "noul",
+        "instructions": (
+            "Does `diff` call an API, method, or data field that conflicts "
+            "with `contracts` or `repo_context`?"
+        ),
+    },
+    "duplicate_implementation": {
+        "type": "noul",
+        "instructions": (
+            "Does `diff` reimplement functionality already shown in "
+            "`repo_context`?"
+        ),
+    },
+    "abstraction_fit": {
+        "type": "choice",
+        "instructions": "How does the main new abstraction in `diff` fit `requirement`?",
+        "criteria": {
+            "necessary": "It directly supports a concrete requirement.",
+            "premature": "It prepares for possible future needs without a current use.",
+            "redundant": "An existing repository abstraction already serves this purpose.",
+            "none_added": "No meaningful abstraction was added.",
+            "unclear": "The supplied evidence is insufficient to decide.",
+        },
+    },
+    "unnecessary_dependency": {
+        "type": "noul",
+        "instructions": (
+            "Does `diff` introduce a dependency for behavior already available "
+            "through the supplied repository code or existing dependencies?"
+        ),
+    },
+    "failure_handling": {
+        "type": "choice",
+        "instructions": "How does `diff` handle failures in the changed behavior?",
+        "criteria": {
+            "handled": "Failures are handled or propagated as required.",
+            "swallowed": "An error can be silently suppressed.",
+            "false_success": "A failed operation can be reported as successful.",
+            "not_applicable": "The change has no relevant failure path.",
+            "unclear": "The supplied evidence is insufficient to decide.",
+        },
+    },
+    "test_quality": {
+        "type": "choice",
+        "instructions": "What is the main limitation of `tests` for the behavior in `diff`?",
+        "criteria": {
+            "meaningful": "Tests check the required observable behavior.",
+            "happy_path_only": "Tests omit a material failure or edge case.",
+            "mirrors_implementation": "Tests repeat implementation assumptions without verifying the requirement.",
+            "missing": "No relevant test is supplied.",
+            "unclear": "The supplied evidence is insufficient to decide.",
+        },
+    },
+    "misleading_comments": {
+        "type": "noul",
+        "instructions": (
+            "Does an added comment or docstring in `diff` claim behavior "
+            "that the changed code does not perform?"
+        ),
+    },
+    "primary_concern": {
+        "type": "choice",
+        "instructions": "Which concern deserves the first human review?",
+        "criteria": {
+            "wrong_behavior": "The change appears to produce an incorrect result.",
+            "contract_mismatch": "The change conflicts with a supplied interface or schema.",
+            "hidden_failure": "The change conceals or misreports a failure.",
+            "duplication": "The change repeats existing functionality.",
+            "excess_complexity": "The change adds structure without a current need.",
+            "test_gap": "The main concern is missing or weak tests.",
+            "none_evident": "No concern is supported by the supplied evidence.",
+            "insufficient_context": "The evidence does not support a classification.",
+        },
+    },
+    "impact": {
+        "type": "score",
+        "instructions": "What is the impact of the strongest concern supported by the supplied evidence?",
+        "criteria": [
+            "No concern evident",
+            "Minor maintenance cost",
+            "Behavior may be wrong in an edge case",
+            "Required behavior can fail",
+            "Critical path can fail or report a false success",
+        ],
+    },
 }
+
+# noul questions flag on cfg.slop_noul_threshold; these choice questions flag on
+# specific criteria values instead — DESIGN CALL, not in AISlopqs.txt, revisit if wrong.
+FLAGGED_CHOICES: dict[str, set[str]] = {
+    "requirement_coverage": {"partial", "unrelated", "unclear"},
+    "abstraction_fit": {"premature", "redundant", "unclear"},
+    "failure_handling": {"swallowed", "false_success", "unclear"},
+    "test_quality": {"happy_path_only", "mirrors_implementation", "missing", "unclear"},
+}
+
+# primary_concern/impact are a summary pair, not standalone findings: only surface
+# them when a real concern was chosen and its impact clears cfg.slop_impact_floor.
+_NO_CONCERN = {"none_evident", "insufficient_context"}
+
+
+def _build_question(spec: dict) -> Choice | Noul | Score:
+    if spec["type"] == "noul":
+        return Noul(instructions=spec["instructions"])
+    if spec["type"] == "choice":
+        return Choice(instructions=spec["instructions"], criteria=spec["criteria"])
+    if spec["type"] == "score":
+        return Score(instructions=spec["instructions"], criteria=spec["criteria"])
+    raise ValueError(f"unknown slop question type: {spec['type']}")
 
 _FILE_SPLIT = re.compile(r"^diff --git a/(\S+) b/\S+$", re.MULTILINE)
 
@@ -53,9 +168,18 @@ async def run_checks(pr_number: int, issue_title: str, github: GitHub, jev: Jev,
     findings += [f"secrets: {f}" for f in scan_diff(diff)]
 
     for path, hunk in split_diff(diff).items():
-        a = await jev.ask({"issue": issue_title, "file": path, "diff": hunk},
-                          {k: Noul(instructions=q) for k, q in SLOP_QUESTIONS.items()})
-        findings += [f"slop: {path}: {k} (p={a[k].noul:.2f})" for k in SLOP_QUESTIONS if a[k].noul > cfg.slop_noul_threshold]
+        state = {"issue": issue_title, "file": path, "diff": hunk}
+        a = await jev.ask(state, {k: _build_question(spec) for k, spec in SLOP_QUESTIONS.items()})
+
+        for k, spec in SLOP_QUESTIONS.items():
+            if spec["type"] == "noul" and a[k].noul > cfg.slop_noul_threshold:
+                findings.append(f"slop: {path}: {k} (p={a[k].noul:.2f})")
+            elif k in FLAGGED_CHOICES and a[k].choice in FLAGGED_CHOICES[k]:
+                findings.append(f"slop: {path}: {k}={a[k].choice} (conf={a[k].confidence:.2f})")
+
+        concern, impact = a["primary_concern"].choice, a["impact"].score
+        if concern not in _NO_CONCERN and impact > cfg.slop_impact_floor:
+            findings.append(f"slop: {path}: primary_concern={concern} (impact={impact:.2f})")
 
     if findings:
         return ChecksResult(status=Status.failed, findings=findings)

@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     gmi_model: str | None = None
     photon_project_id: str | None = None
     photon_secret: SecretStr | None = None
+    photon_bridge_url: str = "http://localhost:4001"  # the TS process in photon-bridge/, not Spectrum directly
     browserbase_api_key: SecretStr | None = None
     browserbase_project_id: str | None = None
     github_token: SecretStr | None = None
@@ -66,6 +67,7 @@ class Settings(BaseSettings):
     escalate_confidence: float = 0.85      # from the routing notes
     injection_noul_threshold: float = 0.5
     slop_noul_threshold: float = 0.5
+    slop_impact_floor: float = 0.5  # min `impact` score to surface a primary_concern finding
     doc_relevance_threshold: float = 0.5
     reply_parse_confidence_floor: float = 0.6
 

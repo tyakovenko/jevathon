@@ -31,7 +31,7 @@ def build_services(cfg: Settings) -> Services:
     return Services(
         jev=RealJev(_secret(cfg.typesafe_api_key), cfg.jev_model) if cfg.jev_mode is real else FakeJev(),
         llm=GmiLLM(_secret(cfg.gmi_api_key), cfg.gmi_base_url, cfg.gmi_model) if cfg.llm_mode is real else FakeLLM(),
-        photon=RealPhoton(cfg.photon_project_id, _secret(cfg.photon_secret)) if cfg.photon_mode is real else FakePhoton(),
+        photon=RealPhoton(cfg.photon_bridge_url) if cfg.photon_mode is real else FakePhoton(),
         browserbase=(
             RealBrowserbase(_secret(cfg.browserbase_api_key), cfg.browserbase_project_id)
             if cfg.browserbase_mode is real else FakeBrowserbase()

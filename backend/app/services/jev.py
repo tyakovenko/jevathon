@@ -58,8 +58,8 @@ class FakeJev:
             probs = {o: (1.0 if i == 0 else 0.0) for i, o in enumerate(options)}
             return ChoiceAnswer(type="choice", choice=options[0], confidence=self.DEFAULT_CONFIDENCE, probabilities=probs)
         if isinstance(q, Score):
-            levels = {str(i): (1.0 if i == 0 else 0.0) for i in range(len(q.criteria))}
-            legend = {str(i): str(c) for i, c in enumerate(q.criteria)}
+            levels = {i: (1.0 if i == 0 else 0.0) for i in range(len(q.criteria))}
+            legend = {i: str(c) for i, c in enumerate(q.criteria)}
             return ScoreAnswer(type="score", score=0.0, confidence=self.DEFAULT_CONFIDENCE, legend=legend, probabilities=levels)
         return NoulAnswer(type="noul", noul=0.0)
 

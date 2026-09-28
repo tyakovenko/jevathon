@@ -1,12 +1,14 @@
 """Texting devs via Photon (iMessage/SMS). Transport only.
 
-Real adapter pending API docs: Photon's SDKs are TypeScript-first (spectrum-ts); the Python/REST
-send + inbound-reply (webhook) shapes are unconfirmed. See docs §13 Q4. Don't guess the API.
-Inbound replies arrive at POST /webhooks/photon → Orchestrator.on_dev_reply.
+Photon's SDK is TypeScript-only (spectrum-ts) — this backend is Python, so it can't speak
+Spectrum's API directly. RealPhoton instead calls the small TS sidecar in ../photon-bridge/
+(POST /send), which holds the actual Spectrum session. Inbound replies go the other way:
+the bridge forwards them to POST /webhooks/photon -> Orchestrator.on_dev_reply.
 """
 
 from typing import Protocol
 
+import httpx
 from pydantic import BaseModel
 
 
@@ -20,11 +22,12 @@ class Photon(Protocol):
 
 
 class RealPhoton:
-    def __init__(self, project_id: str, secret: str) -> None:
-        raise NotImplementedError("Photon real adapter not built yet — need Photon API docs (docs §13 Q4)")
+    def __init__(self, bridge_url: str) -> None:
+        self._http = httpx.AsyncClient(base_url=bridge_url, timeout=30)
 
-    async def send(self, to: str, text: str) -> None:  # pragma: no cover
-        raise NotImplementedError
+    async def send(self, to: str, text: str) -> None:
+        r = await self._http.post("/send", json={"to": to, "text": text})
+        r.raise_for_status()
 
 
 class FakePhoton:
